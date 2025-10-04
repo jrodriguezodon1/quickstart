@@ -6,7 +6,7 @@ x-environment:
   PLAID_PRODUCTS: ${PLAID_PRODUCTS}
   PLAID_COUNTRY_CODES: ${PLAID_COUNTRY_CODES}
   PLAID_REDIRECT_URI: ${PLAID_REDIRECT_URI}
-  PLAID_ENV: ${PLAID_ENV}
+  PLAID_ENV: ${PLAID_ENges}
 services:
   go:
     networks:
@@ -15,6 +15,7 @@ services:
       - "frontend"
     build:
       context: .
+      
       dockerfile: ./go/Dockerfile
     ports: ["8000:8000"]
     environment:

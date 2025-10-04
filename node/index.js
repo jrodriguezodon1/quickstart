@@ -9,6 +9,13 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const moment = require('moment');
 const cors = require('cors');
+const {
+  supabase,
+  savePlaidItem,
+  saveAccounts,
+  saveTransactions,
+  getOrCreateWorkspace
+} = require('./supabase-client');
 
 const APP_PORT = process.env.APP_PORT || 8000;
 const PLAID_CLIENT_ID = process.env.PLAID_CLIENT_ID;
@@ -245,6 +252,8 @@ app.post(
 // https://plaid.com/docs/#exchange-token-flow
 app.post('/api/set_access_token', function (request, response, next) {
   PUBLIC_TOKEN = request.body.public_token;
+  const userId = request.body.user_id; // Pass user_id from frontend
+
   Promise.resolve()
     .then(async function () {
       const tokenResponse = await client.itemPublicTokenExchange({
@@ -253,6 +262,46 @@ app.post('/api/set_access_token', function (request, response, next) {
       prettyPrintResponse(tokenResponse);
       ACCESS_TOKEN = tokenResponse.data.access_token;
       ITEM_ID = tokenResponse.data.item_id;
+
+      // Get institution info
+      const itemResponse = await client.itemGet({
+        access_token: ACCESS_TOKEN,
+      });
+
+      // Get or create workspace for user
+      let workspaceId = null;
+      if (userId) {
+        try {
+          workspaceId = await getOrCreateWorkspace(userId);
+        } catch (error) {
+          console.error('Error getting workspace:', error);
+        }
+      }
+
+      // Save to Supabase
+      if (userId && workspaceId) {
+        try {
+          await savePlaidItem({
+            item_id: ITEM_ID,
+            access_token: ACCESS_TOKEN,
+            institution: {
+              institution_id: itemResponse.data.item.institution_id,
+              name: 'Unknown' // We'll get the name from institutions endpoint if needed
+            },
+            workspace_id: workspaceId,
+            user_id: userId
+          });
+
+          // Get and save accounts
+          const accountsResponse = await client.accountsGet({
+            access_token: ACCESS_TOKEN,
+          });
+          await saveAccounts(accountsResponse.data.accounts, ITEM_ID, workspaceId);
+        } catch (error) {
+          console.error('Error saving to Supabase:', error);
+        }
+      }
+
       response.json({
         // the 'access_token' is a private token, DO NOT pass this token to the frontend in your production environment
         access_token: ACCESS_TOKEN,
@@ -323,6 +372,18 @@ app.get('/api/transactions', function (request, response, next) {
       const compareTxnsByDateAscending = (a, b) => (a.date > b.date) - (a.date < b.date);
       // Return the 8 most recent transactions
       const recently_added = [...added].sort(compareTxnsByDateAscending).slice(-8);
+
+      // Save transactions to Supabase if we have a workspace
+      const userId = request.query.user_id;
+      if (userId && added.length > 0) {
+        try {
+          const workspaceId = await getOrCreateWorkspace(userId);
+          await saveTransactions(added, workspaceId);
+        } catch (error) {
+          console.error('Error saving transactions to Supabase:', error);
+        }
+      }
+
       response.json({ latest_transactions: recently_added });
     })
     .catch(next);
